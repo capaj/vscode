@@ -47,6 +47,7 @@ export class CompletionModel {
 	private _filteredItems?: StrictCompletionItem[];
 	private _providerInfo?: Map<CompletionItemProvider, boolean>;
 	private _stats?: ICompletionStats;
+	private _isLoading: boolean = false;
 
 	constructor(
 		items: CompletionItem[],
@@ -55,7 +56,8 @@ export class CompletionModel {
 		wordDistance: WordDistance,
 		options: InternalSuggestOptions,
 		snippetSuggestions: 'top' | 'bottom' | 'inline' | 'none',
-		readonly clipboardText: string | undefined
+		isLoading: boolean = false,
+		readonly clipboardText: string | undefined = undefined
 	) {
 		this._items = items;
 		this._column = column;
@@ -63,6 +65,7 @@ export class CompletionModel {
 		this._options = options;
 		this._refilterKind = Refilter.All;
 		this._lineContext = lineContext;
+		this._isLoading = isLoading;
 
 		if (snippetSuggestions === 'top') {
 			this._snippetCompareFn = CompletionModel._compareCompletionItemsSnippetsUp;
@@ -73,6 +76,9 @@ export class CompletionModel {
 
 	get lineContext(): LineContext {
 		return this._lineContext;
+	}
+	get isLoading(): boolean {
+		return this._isLoading;
 	}
 
 	set lineContext(value: LineContext) {

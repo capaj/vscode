@@ -25,7 +25,7 @@ import { URI as uri } from 'vs/base/common/uri';
 import { CompletionProviderRegistry, CompletionList, CompletionContext, CompletionItemKind } from 'vs/editor/common/modes';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { ITextModel } from 'vs/editor/common/model';
-import { provideSuggestionItems, CompletionOptions } from 'vs/editor/contrib/suggest/suggest';
+import { provideSuggestionItems, CompletionOptions, getLastInGenerator, CompletionItemModel } from 'vs/editor/contrib/suggest/suggest';
 import { ICodeEditorService } from 'vs/editor/browser/services/codeEditorService';
 import { transparent, editorForeground } from 'vs/platform/theme/common/colorRegistry';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
@@ -213,12 +213,12 @@ export class BreakpointWidget extends ZoneWidget implements IPrivateBreakpointWi
 		const scopedContextKeyService = this.contextKeyService.createScoped(container);
 		this.toDispose.push(scopedContextKeyService);
 
-		const scopedInstatiationService = this.instantiationService.createChild(new ServiceCollection(
+		const scopedInstantiationService = this.instantiationService.createChild(new ServiceCollection(
 			[IContextKeyService, scopedContextKeyService], [IPrivateBreakpointWidgetService, this]));
 
 		const options = this.createEditorOptions();
 		const codeEditorWidgetOptions = getSimpleCodeEditorWidgetOptions();
-		this.input = <IActiveCodeEditor>scopedInstatiationService.createInstance(CodeEditorWidget, container, options, codeEditorWidgetOptions);
+		this.input = <IActiveCodeEditor>scopedInstantiationService.createInstance(CodeEditorWidget, container, options, codeEditorWidgetOptions);
 		CONTEXT_IN_BREAKPOINT_WIDGET.bindTo(scopedContextKeyService).set(true);
 		const model = this.modelService.createModel('', null, uri.parse(`${DEBUG_SCHEME}:${this.editor.getId()}:breakpointinput`), true);
 		this.input.setModel(model);
@@ -236,26 +236,27 @@ export class BreakpointWidget extends ZoneWidget implements IPrivateBreakpointWi
 				let suggestionsPromise: Promise<CompletionList>;
 				const underlyingModel = this.editor.getModel();
 				if (underlyingModel && (this.context === Context.CONDITION || (this.context === Context.LOG_MESSAGE && isCurlyBracketOpen(this.input)))) {
-					suggestionsPromise = provideSuggestionItems(underlyingModel, new Position(this.lineNumber, 1), new CompletionOptions(undefined, new Set<CompletionItemKind>().add(CompletionItemKind.Snippet)), _context, token).then(suggestions => {
+					suggestionsPromise = getLastInGenerator(provideSuggestionItems(underlyingModel, new Position(this.lineNumber, 1), new CompletionOptions(undefined, new Set<CompletionItemKind>().add(CompletionItemKind.Snippet)), _context, token))
+						.then((suggestions: CompletionItemModel) => {
 
-						let overwriteBefore = 0;
-						if (this.context === Context.CONDITION) {
-							overwriteBefore = position.column - 1;
-						} else {
-							// Inside the currly brackets, need to count how many useful characters are behind the position so they would all be taken into account
-							const value = this.input.getModel().getValue();
-							while ((position.column - 2 - overwriteBefore >= 0) && value[position.column - 2 - overwriteBefore] !== '{' && value[position.column - 2 - overwriteBefore] !== ' ') {
-								overwriteBefore++;
+							let overwriteBefore = 0;
+							if (this.context === Context.CONDITION) {
+								overwriteBefore = position.column - 1;
+							} else {
+								// Inside the curly brackets, need to count how many useful characters are behind the position so they would all be taken into account
+								const value = this.input.getModel().getValue();
+								while ((position.column - 2 - overwriteBefore >= 0) && value[position.column - 2 - overwriteBefore] !== '{' && value[position.column - 2 - overwriteBefore] !== ' ') {
+									overwriteBefore++;
+								}
 							}
-						}
 
-						return {
-							suggestions: suggestions.items.map(s => {
-								s.completion.range = Range.fromPositions(position.delta(0, -overwriteBefore), position);
-								return s.completion;
-							})
-						};
-					});
+							return {
+								suggestions: suggestions.items.map(s => {
+									s.completion.range = Range.fromPositions(position.delta(0, -overwriteBefore), position);
+									return s.completion;
+								})
+							};
+						});
 				} else {
 					suggestionsPromise = Promise.resolve({ suggestions: [] });
 				}

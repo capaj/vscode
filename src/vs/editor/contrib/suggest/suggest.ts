@@ -189,13 +189,25 @@ export class CompletionItemModel {
 	) { }
 }
 
-export async function provideSuggestionItems(
+export const getLastInGenerator = async <T>(generator: AsyncGenerator<T>): Promise<T> => {
+	let res: T | null = null;
+	for await (let value of generator) {
+		res = value;
+	}
+	if (!res) {
+		throw new Error('must yield at least once');
+	}
+	return res;
+};
+
+
+export async function* provideSuggestionItems(
 	model: ITextModel,
 	position: Position,
 	options: CompletionOptions = CompletionOptions.default,
 	context: modes.CompletionContext = { triggerKind: modes.CompletionTriggerKind.Invoke },
 	token: CancellationToken = CancellationToken.None
-): Promise<CompletionItemModel> {
+): AsyncGenerator<CompletionItemModel> {
 
 	const sw = new StopWatch(true);
 	position = position.clone();
@@ -233,7 +245,7 @@ export async function provideSuggestionItems(
 			disposables.add(container);
 		}
 		durations.push({
-			providerName: provider._debugDisplayName ?? 'unkown_provider', elapsedProvider: container.duration ?? -1, elapsedOverall: sw.elapsed()
+			providerName: provider._debugDisplayName ?? 'unknown_provider', elapsedProvider: container.duration ?? -1, elapsedOverall: sw.elapsed()
 		});
 	};
 
@@ -251,6 +263,15 @@ export async function provideSuggestionItems(
 		onCompletionList(_snippetSuggestSupport, list, sw);
 	})();
 
+	await snippetCompletions;
+
+	let completionModel = new CompletionItemModel(
+		result.sort(getSuggestionComparator(options.snippetSortOrder)),
+		needsClipboard,
+		{ entries: durations, elapsed: sw.elapsed() },
+		disposables
+	);
+	yield completionModel;
 	// add suggestions from contributed providers - providers are ordered in groups of
 	// equal score and once a group produces a result the process stops
 	// get provider groups, always add snippet suggestion provider
@@ -277,19 +298,20 @@ export async function provideSuggestionItems(
 		}
 	}
 
-	await snippetCompletions;
-
 	if (token.isCancellationRequested) {
 		disposables.dispose();
 		return Promise.reject<any>(canceled());
 	}
 
-	return new CompletionItemModel(
+	completionModel = new CompletionItemModel(
 		result.sort(getSuggestionComparator(options.snippetSortOrder)),
 		needsClipboard,
 		{ entries: durations, elapsed: sw.elapsed() },
-		disposables,
+		disposables
 	);
+
+
+	yield completionModel;
 }
 
 
@@ -360,7 +382,7 @@ CommandsRegistry.registerCommand('_executeCompletionItemProvider', async (access
 		};
 
 		const resolving: Promise<any>[] = [];
-		const completions = await provideSuggestionItems(ref.object.textEditorModel, Position.lift(position), undefined, { triggerCharacter, triggerKind: triggerCharacter ? modes.CompletionTriggerKind.TriggerCharacter : modes.CompletionTriggerKind.Invoke });
+		const completions = await getLastInGenerator(provideSuggestionItems(ref.object.textEditorModel, Position.lift(position), undefined, { triggerCharacter, triggerKind: triggerCharacter ? modes.CompletionTriggerKind.TriggerCharacter : modes.CompletionTriggerKind.Invoke }));
 		for (const item of completions.items) {
 			if (resolving.length < (maxItemsToResolve ?? 0)) {
 				resolving.push(item.resolve(CancellationToken.None));
@@ -375,6 +397,7 @@ CommandsRegistry.registerCommand('_executeCompletionItemProvider', async (access
 		} finally {
 			setTimeout(() => completions.disposable.dispose(), 100);
 		}
+
 
 	} finally {
 		ref.dispose();

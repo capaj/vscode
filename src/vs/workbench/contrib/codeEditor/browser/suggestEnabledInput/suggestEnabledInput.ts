@@ -193,7 +193,7 @@ export class SuggestEnabledInput extends Widget implements IThemable {
 				let zeroIndexedWordStart = query.lastIndexOf(' ', zeroIndexedColumn - 1) + 1;
 				let alreadyTypedCount = zeroIndexedColumn - zeroIndexedWordStart;
 
-				// dont show suggestions if the user has typed something, but hasn't used the trigger character
+				// don't show suggestions if the user has typed something, but hasn't used the trigger character
 				if (alreadyTypedCount > 0 && validatedSuggestProvider.triggerCharacters.indexOf(query[zeroIndexedWordStart]) === -1) {
 					return { suggestions: [] };
 				}
@@ -211,6 +211,7 @@ export class SuggestEnabledInput extends Widget implements IThemable {
 				};
 			}
 		}));
+
 	}
 
 	public updateAriaLabel(label: string): void {

@@ -30,7 +30,7 @@ import { getCodeActions } from 'vs/editor/contrib/codeAction/codeAction';
 import { getWorkspaceSymbols } from 'vs/workbench/contrib/search/common/search';
 import { rename } from 'vs/editor/contrib/rename/rename';
 import { provideSignatureHelp } from 'vs/editor/contrib/parameterHints/provideSignatureHelp';
-import { provideSuggestionItems, CompletionOptions } from 'vs/editor/contrib/suggest/suggest';
+import { provideSuggestionItems, CompletionOptions, getLastInGenerator } from 'vs/editor/contrib/suggest/suggest';
 import { getDocumentFormattingEditsUntilResult, getDocumentRangeFormattingEditsUntilResult, getOnTypeFormattingEdits } from 'vs/editor/contrib/format/format';
 import { getLinks } from 'vs/editor/contrib/links/getLinks';
 import { MainContext, ExtHostContext } from 'vs/workbench/api/common/extHost.protocol';
@@ -883,7 +883,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		const { items } = await getLastInGenerator(provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))));
 		assert.equal(items.length, 1);
 		assert.equal(items[0].completion.insertText, 'testing2');
 	});
@@ -903,7 +903,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		const { items } = await getLastInGenerator(provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))));
 		assert.equal(items.length, 1);
 		assert.equal(items[0].completion.insertText, 'weak-selector');
 	});
@@ -923,7 +923,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		const { items } = await getLastInGenerator(provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))));
 		assert.equal(items.length, 2);
 		assert.equal(items[0].completion.insertText, 'strong-1'); // sort by label
 		assert.equal(items[1].completion.insertText, 'strong-2');
@@ -945,7 +945,7 @@ suite('ExtHostLanguageFeatures', function () {
 
 
 		await rpcProtocol.sync();
-		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		const { items } = await getLastInGenerator(provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))));
 		assert.equal(items[0].container.incomplete, false);
 	});
 
@@ -958,7 +958,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))).then(model => {
+		getLastInGenerator(provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)))).then(model => {
 			assert.equal(model.items[0].container.incomplete, true);
 		});
 	});

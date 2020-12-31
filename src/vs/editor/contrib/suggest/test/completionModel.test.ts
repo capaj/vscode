@@ -245,7 +245,7 @@ suite('CompletionModel', function () {
 		model = new CompletionModel([item1, item2], 1, {
 			leadingLineContent: 'M',
 			characterCountDelta: 0
-		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue, undefined);
+		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue);
 
 		assert.equal(model.items.length, 2);
 
@@ -265,7 +265,7 @@ suite('CompletionModel', function () {
 		model = new CompletionModel(items, 3, {
 			leadingLineContent: '  ',
 			characterCountDelta: 0
-		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue, undefined);
+		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue);
 
 		assert.equal(model.items.length, 2);
 
@@ -284,7 +284,7 @@ suite('CompletionModel', function () {
 		], 1, {
 			leadingLineContent: '',
 			characterCountDelta: 0
-		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue, undefined);
+		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue);
 
 		assert.equal(model.items.length, 5);
 
@@ -311,7 +311,7 @@ suite('CompletionModel', function () {
 		], 1, {
 			leadingLineContent: '',
 			characterCountDelta: 0
-		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue, undefined);
+		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue);
 
 		// query gets longer, narrow down the narrow-down'ed-set from before
 		model.lineContext = { leadingLineContent: 'rlut', characterCountDelta: 4 };
@@ -333,7 +333,7 @@ suite('CompletionModel', function () {
 		], 1, {
 			leadingLineContent: '',
 			characterCountDelta: 0
-		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue, undefined);
+		}, WordDistance.None, EditorOptions.suggest.defaultValue, EditorOptions.snippetSuggestions.defaultValue);
 
 		model.lineContext = { leadingLineContent: 'form', characterCountDelta: 4 };
 		assert.equal(model.items.length, 5);

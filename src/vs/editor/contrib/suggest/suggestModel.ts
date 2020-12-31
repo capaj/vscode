@@ -116,6 +116,7 @@ export class SuggestModel implements IDisposable {
 	readonly onDidCancel: Event<ICancelEvent> = this._onDidCancel.event;
 	readonly onDidTrigger: Event<ITriggerEvent> = this._onDidTrigger.event;
 	readonly onDidSuggest: Event<ISuggestEvent> = this._onDidSuggest.event;
+	private _completionsGeneratorRunning = false; // TODO use this to display loading in progress
 
 	constructor(
 		private readonly _editor: ICodeEditor,
@@ -248,6 +249,10 @@ export class SuggestModel implements IDisposable {
 
 	get state(): State {
 		return this._state;
+	}
+
+	get completionsGeneratorRunning(): boolean {
+		return this._completionsGeneratorRunning;
 	}
 
 	cancel(retrigger: boolean = false): void {
@@ -431,59 +436,72 @@ export class SuggestModel implements IDisposable {
 		const itemKindFilter = SuggestModel._createItemKindFilter(this._editor);
 		const wordDistance = WordDistance.create(this._editorWorkerService, this._editor);
 
-		const completions = provideSuggestionItems(
+		const completionsGenerator = provideSuggestionItems(
 			model,
 			this._editor.getPosition(),
 			new CompletionOptions(snippetSortOrder, itemKindFilter, onlyFrom),
 			suggestCtx,
 			this._requestToken.token
 		);
+		(async () => {
+			const wordDistanceRes = await wordDistance;
+			let items: CompletionItem[] = [];
+			this._completionsGeneratorRunning = true;
+			for await (let completions of completionsGenerator) {
+				try {
 
-		Promise.all([completions, wordDistance]).then(async ([completions, wordDistance]) => {
 
-			this._requestToken?.dispose();
+					this._requestToken?.dispose();
 
-			if (this._state === State.Idle) {
-				return;
+					if (this._state === State.Idle) {
+						return;
+					}
+
+					if (!this._editor.hasModel()) {
+						return;
+					}
+
+					let clipboardText = existing?.clipboardText;
+					if (!clipboardText && completions.needsClipboard) {
+						clipboardText = await this._clipboardService.readText();
+					}
+
+					const model = this._editor.getModel();
+					items = items.concat(completions.items);
+
+					if (existing) {
+						const cmpFn = getSuggestionComparator(snippetSortOrder);
+						items = items.concat(existing.items).sort(cmpFn);
+					}
+
+					const ctx = new LineContext(model, this._editor.getPosition(), auto, context.shy);
+					this._completionModel = new CompletionModel(items, this._context!.column, {
+						leadingLineContent: ctx.leadingLineContent,
+						characterCountDelta: ctx.column - this._context!.column
+					},
+						wordDistanceRes,
+						this._editor.getOption(EditorOption.suggest),
+						this._editor.getOption(EditorOption.snippetSuggestions),
+						this._completionsGeneratorRunning
+					);
+					// console.log('~ this._completionModel33', this._completionModel)
+
+					// store containers so that they can be disposed later
+					this._completionDisposables.add(completions.disposable);
+
+					this._onNewContext(ctx);
+
+					// finally report telemetry about durations
+					this._reportDurationsTelemetry(completions.durations);
+				} catch (err) {
+					onUnexpectedError(err);
+				}
+
 			}
+			this._completionsGeneratorRunning = false;
+		})();
 
-			if (!this._editor.hasModel()) {
-				return;
-			}
 
-			let clipboardText = existing?.clipboardText;
-			if (!clipboardText && completions.needsClipboard) {
-				clipboardText = await this._clipboardService.readText();
-			}
-
-			const model = this._editor.getModel();
-			let items = completions.items;
-
-			if (existing) {
-				const cmpFn = getSuggestionComparator(snippetSortOrder);
-				items = items.concat(existing.items).sort(cmpFn);
-			}
-
-			const ctx = new LineContext(model, this._editor.getPosition(), auto, context.shy);
-			this._completionModel = new CompletionModel(items, this._context!.column, {
-				leadingLineContent: ctx.leadingLineContent,
-				characterCountDelta: ctx.column - this._context!.column
-			},
-				wordDistance,
-				this._editor.getOption(EditorOption.suggest),
-				this._editor.getOption(EditorOption.snippetSuggestions),
-				clipboardText
-			);
-
-			// store containers so that they can be disposed later
-			this._completionDisposables.add(completions.disposable);
-
-			this._onNewContext(ctx);
-
-			// finally report telemetry about durations
-			this._reportDurationsTelemetry(completions.durations);
-
-		}).catch(onUnexpectedError);
 	}
 
 	private _telemetryGate: number = 0;
@@ -596,7 +614,7 @@ export class SuggestModel implements IDisposable {
 		}
 
 		if (ctx.column > this._context.column && this._completionModel.incomplete.size > 0 && ctx.leadingWord.word.length !== 0) {
-			// typed -> moved cursor RIGHT & incomple model & still on a word -> retrigger
+			// typed -> moved cursor RIGHT & incomplete model & still on a word -> retrigger
 			const { incomplete } = this._completionModel;
 			const items = this._completionModel.adopt(incomplete);
 			this.trigger({ auto: this._state === State.Auto, shy: false, triggerKind: CompletionTriggerKind.TriggerForIncompleteCompletions }, true, incomplete, { items, clipboardText: this._completionModel.clipboardText });

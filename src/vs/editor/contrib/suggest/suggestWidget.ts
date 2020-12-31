@@ -480,6 +480,13 @@ export class SuggestWidget implements IDisposable {
 				this._show();
 				break;
 		}
+
+		if (this._completionModel?.isLoading) {
+			this._messageElement.textContent = SuggestWidget.LOADING_MESSAGE;
+			dom.show(this._messageElement);
+		} else {
+			dom.hide(this._messageElement);
+		}
 	}
 
 	private _show(): void {
@@ -538,6 +545,7 @@ export class SuggestWidget implements IDisposable {
 		this._list.reveal(selectionIndex, 0);
 		this._list.setFocus([selectionIndex]);
 
+		// console.log(this._listElement.innerHTML)
 		this._layout(this.element.size);
 		// Reset focus border
 		if (this._detailsBorderColor) {
