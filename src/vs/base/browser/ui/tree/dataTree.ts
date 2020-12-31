@@ -3,368 +3,203 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ITreeOptions, ComposedTreeDelegate, createComposedTreeListOptions, ITreeEvent, ITreeContextMenuEvent, ITreeMouseEvent } from 'vs/base/browser/ui/tree/abstractTree';
-import { ObjectTree } from 'vs/base/browser/ui/tree/objectTree';
-import { IListVirtualDelegate } from 'vs/base/browser/ui/list/list';
-import { ITreeElement, ITreeNode, ITreeRenderer } from 'vs/base/browser/ui/tree/tree';
-import { IDisposable, dispose } from 'vs/base/common/lifecycle';
-import { Emitter, Event, mapEvent } from 'vs/base/common/event';
-import { timeout } from 'vs/base/common/async';
-import { ISequence } from 'vs/base/common/iterator';
+import { AbstractTree, IAbstractTreeOptions } from 'vs/base/browser/ui/tree/abstractTree';
+import { ITreeNode, ITreeModel, ITreeElement, ITreeRenderer, ITreeSorter, IDataSource, TreeError } from 'vs/base/browser/ui/tree/tree';
+import { ObjectTreeModel } from 'vs/base/browser/ui/tree/objectTreeModel';
+import { IListVirtualDelegate, IIdentityProvider } from 'vs/base/browser/ui/list/list';
+import { Iterable } from 'vs/base/common/iterator';
+import { IList } from 'vs/base/browser/ui/tree/indexTreeModel';
 
-export interface IDataSource<T extends NonNullable<any>> {
-	hasChildren(element: T | null): boolean;
-	getChildren(element: T | null): Thenable<T[]>;
+export interface IDataTreeOptions<T, TFilterData = void> extends IAbstractTreeOptions<T, TFilterData> {
+	readonly sorter?: ITreeSorter<T>;
 }
 
-enum DataTreeNodeState {
-	Uninitialized,
-	Loaded,
-	Loading,
-	Slow
+export interface IDataTreeViewState {
+	readonly focus: string[];
+	readonly selection: string[];
+	readonly expanded: string[];
+	readonly scrollTop: number;
 }
 
-interface IDataTreeNode<T extends NonNullable<any>> {
-	readonly element: T | null;
-	readonly parent: IDataTreeNode<T> | null;
-	state: DataTreeNodeState;
-}
+export class DataTree<TInput, T, TFilterData = void> extends AbstractTree<T | null, TFilterData, T | null> {
 
-interface IDataTreeListTemplateData<T> {
-	templateData: T;
-}
+	protected model!: ObjectTreeModel<T, TFilterData>;
+	private input: TInput | undefined;
 
-function unpack<T, TFilterData>(node: ITreeNode<IDataTreeNode<T>, TFilterData>): ITreeNode<T, TFilterData> {
-	return new Proxy(Object.create(null), {
-		get: (_: any, name: string) => {
-			switch (name) {
-				case 'element': return node.element.element;
-				default: return node[name];
-			}
-		}
-	});
-}
-
-class DataTreeRenderer<T, TFilterData, TTemplateData> implements ITreeRenderer<IDataTreeNode<T>, TFilterData, IDataTreeListTemplateData<TTemplateData>> {
-
-	readonly templateId: string;
-	private renderedNodes = new Map<IDataTreeNode<T>, IDataTreeListTemplateData<TTemplateData>>();
-	private disposables: IDisposable[] = [];
+	private identityProvider: IIdentityProvider<T> | undefined;
+	private nodesByIdentity = new Map<string, ITreeNode<T, TFilterData>>();
 
 	constructor(
-		private renderer: ITreeRenderer<T, TFilterData, TTemplateData>,
-		readonly onDidChangeTwistieState: Event<IDataTreeNode<T>>
-	) {
-		this.templateId = renderer.templateId;
-	}
-
-	renderTemplate(container: HTMLElement): IDataTreeListTemplateData<TTemplateData> {
-		const templateData = this.renderer.renderTemplate(container);
-		return { templateData };
-	}
-
-	renderElement(element: ITreeNode<IDataTreeNode<T>, TFilterData>, index: number, templateData: IDataTreeListTemplateData<TTemplateData>): void {
-		this.renderer.renderElement(unpack(element), index, templateData.templateData);
-	}
-
-	renderTwistie(element: IDataTreeNode<T>, twistieElement: HTMLElement): boolean {
-		if (element.state === DataTreeNodeState.Slow) {
-			twistieElement.innerText = '🤨';
-			return true;
-		}
-
-		return false;
-	}
-
-	disposeElement(element: ITreeNode<IDataTreeNode<T>, TFilterData>, index: number, templateData: IDataTreeListTemplateData<TTemplateData>): void {
-		this.renderer.disposeElement(unpack(element), index, templateData.templateData);
-	}
-
-	disposeTemplate(templateData: IDataTreeListTemplateData<TTemplateData>): void {
-		this.renderer.disposeTemplate(templateData.templateData);
-	}
-
-	dispose(): void {
-		this.renderedNodes.clear();
-		this.disposables = dispose(this.disposables);
-	}
-}
-
-function asTreeEvent<T>(e: ITreeEvent<IDataTreeNode<T>>): ITreeEvent<T> {
-	return {
-		browserEvent: e.browserEvent,
-		elements: e.elements.map(e => e.element!)
-	};
-}
-
-function asTreeMouseEvent<T>(e: ITreeMouseEvent<IDataTreeNode<T>>): ITreeMouseEvent<T> {
-	return {
-		browserEvent: e.browserEvent,
-		element: e.element && e.element.element!
-	};
-}
-
-function asTreeContextMenuEvent<T>(e: ITreeContextMenuEvent<IDataTreeNode<T>>): ITreeContextMenuEvent<T> {
-	return {
-		browserEvent: e.browserEvent,
-		element: e.element && e.element.element!,
-		anchor: e.anchor
-	};
-}
-
-export enum ChildrenResolutionReason {
-	Refresh,
-	Expand
-}
-
-export interface IChildrenResolutionEvent<T> {
-	readonly element: T | null;
-	readonly reason: ChildrenResolutionReason;
-}
-
-export class DataTree<T extends NonNullable<any>, TFilterData = void> implements IDisposable {
-
-	private tree: ObjectTree<IDataTreeNode<T>, TFilterData>;
-	private root: IDataTreeNode<T>;
-	private nodes = new Map<T | null, IDataTreeNode<T>>();
-
-	private _onDidChangeNodeState = new Emitter<IDataTreeNode<T>>();
-
-	private disposables: IDisposable[] = [];
-
-	get onDidChangeFocus(): Event<ITreeEvent<T>> { return mapEvent(this.tree.onDidChangeFocus, asTreeEvent); }
-	get onDidChangeSelection(): Event<ITreeEvent<T>> { return mapEvent(this.tree.onDidChangeSelection, asTreeEvent); }
-	get onDidChangeCollapseState(): Event<T> { return mapEvent(this.tree.onDidChangeCollapseState, e => e.element.element!); }
-
-	private _onDidResolveChildren = new Emitter<IChildrenResolutionEvent<T>>();
-	readonly onDidResolveChildren: Event<IChildrenResolutionEvent<T>> = this._onDidResolveChildren.event;
-
-	get onMouseClick(): Event<ITreeMouseEvent<T>> { return mapEvent(this.tree.onMouseClick, asTreeMouseEvent); }
-	get onMouseDblClick(): Event<ITreeMouseEvent<T>> { return mapEvent(this.tree.onMouseDblClick, asTreeMouseEvent); }
-	get onContextMenu(): Event<ITreeContextMenuEvent<T>> { return mapEvent(this.tree.onContextMenu, asTreeContextMenuEvent); }
-	get onDidDOMFocus(): Event<void> { return this.tree.onDidFocus; }
-	get onDidDOMBlur(): Event<void> { return this.tree.onDidBlur; }
-
-	get onDidDispose(): Event<void> { return this.tree.onDidDispose; }
-
-	constructor(
+		private user: string,
 		container: HTMLElement,
 		delegate: IListVirtualDelegate<T>,
 		renderers: ITreeRenderer<T, TFilterData, any>[],
-		private dataSource: IDataSource<T>,
-		options?: ITreeOptions<T, TFilterData>
+		private dataSource: IDataSource<TInput, T>,
+		options: IDataTreeOptions<T, TFilterData> = {}
 	) {
-		const objectTreeDelegate = new ComposedTreeDelegate<T | null, IDataTreeNode<T>>(delegate);
-		const objectTreeRenderers = renderers.map(r => new DataTreeRenderer(r, this._onDidChangeNodeState.event));
-		const objectTreeOptions = createComposedTreeListOptions<T | null, IDataTreeNode<T>>(options);
+		super(user, container, delegate, renderers, options as IDataTreeOptions<T | null, TFilterData>);
+		this.identityProvider = options.identityProvider;
+	}
 
-		this.tree = new ObjectTree(container, objectTreeDelegate, objectTreeRenderers, objectTreeOptions);
-		this.root = {
-			element: null,
-			parent: null,
-			state: DataTreeNodeState.Uninitialized,
+	// Model
+
+	getInput(): TInput | undefined {
+		return this.input;
+	}
+
+	setInput(input: TInput, viewState?: IDataTreeViewState): void {
+		if (viewState && !this.identityProvider) {
+			throw new TreeError(this.user, 'Can\'t restore tree view state without an identity provider');
+		}
+
+		this.input = input;
+
+		if (!viewState) {
+			this._refresh(input);
+			return;
+		}
+
+		const focus: T[] = [];
+		const selection: T[] = [];
+
+		const isCollapsed = (element: T) => {
+			const id = this.identityProvider!.getId(element).toString();
+			return viewState.expanded.indexOf(id) === -1;
 		};
 
-		this.nodes.set(null, this.root);
+		const onDidCreateNode = (node: ITreeNode<T, TFilterData>) => {
+			const id = this.identityProvider!.getId(node.element).toString();
 
-		this.tree.onDidChangeCollapseState(this._onDidChangeCollapseState, this, this.disposables);
-	}
+			if (viewState.focus.indexOf(id) > -1) {
+				focus.push(node.element);
+			}
 
-	domFocus(): void {
-		this.tree.domFocus();
-	}
-
-	layout(height?: number): void {
-		this.tree.layout(height);
-	}
-
-	refresh(element: T | null): Thenable<void> {
-		return this.refreshNode(this.getNode(element), ChildrenResolutionReason.Refresh);
-	}
-
-	private getNode(element: T | null): IDataTreeNode<T> {
-		const node: IDataTreeNode<T> = this.nodes.get(element);
-
-		if (typeof node === 'undefined') {
-			throw new Error(`Data tree node not found: ${element}`);
-		}
-
-		return node;
-	}
-
-	private refreshNode(node: IDataTreeNode<T>, reason: ChildrenResolutionReason): Thenable<void> {
-		const hasChildren = this.dataSource.hasChildren(node.element);
-
-		if (!hasChildren) {
-			this.setChildren(node === this.root ? null : node);
-			return Promise.resolve();
-		} else {
-			node.state = DataTreeNodeState.Loading;
-			this._onDidChangeNodeState.fire(node);
-
-			const slowTimeout = timeout(800);
-
-			slowTimeout.then(() => {
-				node.state = DataTreeNodeState.Slow;
-				this._onDidChangeNodeState.fire(node);
-			});
-
-			return this.dataSource.getChildren(node.element)
-				.then(children => {
-					slowTimeout.cancel();
-					node.state = DataTreeNodeState.Loaded;
-					this._onDidChangeNodeState.fire(node);
-
-					const createTreeElement = (element: T): ITreeElement<IDataTreeNode<T>> => {
-						const collapsible = this.dataSource.hasChildren(element);
-
-						return {
-							element: {
-								element: element,
-								state: DataTreeNodeState.Uninitialized,
-								parent: node
-							},
-							collapsible,
-							collapsed: true
-						};
-					};
-
-					const nodeChildren = children.map<ITreeElement<IDataTreeNode<T>>>(createTreeElement);
-					this.setChildren(node === this.root ? null : node, nodeChildren);
-					this._onDidResolveChildren.fire({ element: node.element, reason });
-				}, err => {
-					slowTimeout.cancel();
-					node.state = DataTreeNodeState.Uninitialized;
-					this._onDidChangeNodeState.fire(node);
-
-					if (node !== this.root) {
-						this.tree.collapse(node);
-					}
-
-					return Promise.reject(err);
-				});
-		}
-	}
-
-	private _onDidChangeCollapseState(treeNode: ITreeNode<IDataTreeNode<T>, any>): void {
-		if (!treeNode.collapsed && treeNode.element.state === DataTreeNodeState.Uninitialized) {
-			this.refreshNode(treeNode.element, ChildrenResolutionReason.Expand);
-		}
-	}
-
-	private setChildren(element: IDataTreeNode<T> | null, children?: ISequence<ITreeElement<IDataTreeNode<T>>>): void {
-		const insertedElements = new Set<T>();
-
-		const onDidCreateNode = (node: ITreeNode<IDataTreeNode<T>, TFilterData>) => {
-			if (node.element.element) {
-				insertedElements.add(node.element.element);
-				this.nodes.set(node.element.element, node.element);
+			if (viewState.selection.indexOf(id) > -1) {
+				selection.push(node.element);
 			}
 		};
 
-		const onDidDeleteNode = (node: ITreeNode<IDataTreeNode<T>, TFilterData>) => {
-			if (node.element.element) {
-				if (!insertedElements.has(node.element.element)) {
-					this.nodes.delete(node.element.element);
+		this._refresh(input, isCollapsed, onDidCreateNode);
+		this.setFocus(focus);
+		this.setSelection(selection);
+
+		if (viewState && typeof viewState.scrollTop === 'number') {
+			this.scrollTop = viewState.scrollTop;
+		}
+	}
+
+	updateChildren(element: TInput | T = this.input!): void {
+		if (typeof this.input === 'undefined') {
+			throw new TreeError(this.user, 'Tree input not set');
+		}
+
+		let isCollapsed: ((el: T) => boolean | undefined) | undefined;
+
+		if (this.identityProvider) {
+			isCollapsed = element => {
+				const id = this.identityProvider!.getId(element).toString();
+				const node = this.nodesByIdentity.get(id);
+
+				if (!node) {
+					return undefined;
 				}
+
+				return node.collapsed;
+			};
+		}
+
+		this._refresh(element, isCollapsed);
+	}
+
+	resort(element: T | TInput = this.input!, recursive = true): void {
+		this.model.resort((element === this.input ? null : element) as T, recursive);
+	}
+
+	// View
+
+	refresh(element?: T): void {
+		if (element === undefined) {
+			this.view.rerender();
+			return;
+		}
+
+		this.model.rerender(element);
+	}
+
+	// Implementation
+
+	private _refresh(element: TInput | T, isCollapsed?: (el: T) => boolean | undefined, onDidCreateNode?: (node: ITreeNode<T, TFilterData>) => void): void {
+		let onDidDeleteNode: ((node: ITreeNode<T, TFilterData>) => void) | undefined;
+
+		if (this.identityProvider) {
+			const insertedElements = new Set<string>();
+
+			const outerOnDidCreateNode = onDidCreateNode;
+			onDidCreateNode = (node: ITreeNode<T, TFilterData>) => {
+				const id = this.identityProvider!.getId(node.element).toString();
+
+				insertedElements.add(id);
+				this.nodesByIdentity.set(id, node);
+
+				if (outerOnDidCreateNode) {
+					outerOnDidCreateNode(node);
+				}
+			};
+
+			onDidDeleteNode = (node: ITreeNode<T, TFilterData>) => {
+				const id = this.identityProvider!.getId(node.element).toString();
+
+				if (!insertedElements.has(id)) {
+					this.nodesByIdentity.delete(id);
+				}
+			};
+		}
+
+		this.model.setChildren((element === this.input ? null : element) as T, this.iterate(element, isCollapsed).elements, onDidCreateNode, onDidDeleteNode);
+	}
+
+	private iterate(element: TInput | T, isCollapsed?: (el: T) => boolean | undefined): { elements: Iterable<ITreeElement<T>>, size: number } {
+		const children = [...this.dataSource.getChildren(element)];
+		const elements = Iterable.map(children, element => {
+			const { elements: children, size } = this.iterate(element, isCollapsed);
+			const collapsible = this.dataSource.hasChildren ? this.dataSource.hasChildren(element) : undefined;
+			const collapsed = size === 0 ? undefined : (isCollapsed && isCollapsed(element));
+
+			return { element, children, collapsible, collapsed };
+		});
+
+		return { elements, size: children.length };
+	}
+
+	protected createModel(user: string, view: IList<ITreeNode<T, TFilterData>>, options: IDataTreeOptions<T, TFilterData>): ITreeModel<T | null, TFilterData, T | null> {
+		return new ObjectTreeModel(user, view, options);
+	}
+
+	// view state
+
+	getViewState(): IDataTreeViewState {
+		if (!this.identityProvider) {
+			throw new TreeError(this.user, 'Can\'t get tree view state without an identity provider');
+		}
+
+		const getId = (element: T | null) => this.identityProvider!.getId(element!).toString();
+		const focus = this.getFocus().map(getId);
+		const selection = this.getSelection().map(getId);
+
+		const expanded: string[] = [];
+		const root = this.model.getNode();
+		const queue = [root];
+
+		while (queue.length > 0) {
+			const node = queue.shift()!;
+
+			if (node !== root && node.collapsible && !node.collapsed) {
+				expanded.push(getId(node.element!));
 			}
-		};
 
-		this.tree.setChildren(element, children, onDidCreateNode, onDidDeleteNode);
-	}
+			queue.push(...node.children);
+		}
 
-	// Tree
-
-	get visibleNodeCount(): number {
-		return this.tree.visibleNodeCount;
-	}
-
-	collapse(element: T): boolean {
-		return this.tree.collapse(this.getNode(element));
-	}
-
-	expand(element: T): boolean {
-		return this.tree.expand(this.getNode(element));
-	}
-
-	toggleCollapsed(element: T): void {
-		this.tree.toggleCollapsed(this.getNode(element));
-	}
-
-	collapseAll(): void {
-		this.tree.collapseAll();
-	}
-
-	isCollapsed(element: T): boolean {
-		return this.tree.isCollapsed(this.getNode(element));
-	}
-
-	isExpanded(element: T): boolean {
-		return this.tree.isExpanded(this.getNode(element));
-	}
-
-	refilter(): void {
-		this.tree.refilter();
-	}
-
-	setSelection(elements: T[], browserEvent?: UIEvent): void {
-		const nodes = elements.map(e => this.getNode(e));
-		this.tree.setSelection(nodes, browserEvent);
-	}
-
-	getSelection(): T[] {
-		const nodes = this.tree.getSelection();
-		return nodes.map(n => n.element!);
-	}
-
-	setFocus(elements: T[], browserEvent?: UIEvent): void {
-		const nodes = elements.map(e => this.getNode(e));
-		this.tree.setFocus(nodes, browserEvent);
-	}
-
-	focusNext(n = 1, loop = false, browserEvent?: UIEvent): void {
-		this.tree.focusNext(n, loop, browserEvent);
-	}
-
-	focusPrevious(n = 1, loop = false, browserEvent?: UIEvent): void {
-		this.tree.focusPrevious(n, loop, browserEvent);
-	}
-
-	focusNextPage(browserEvent?: UIEvent): void {
-		this.tree.focusNextPage(browserEvent);
-	}
-
-	focusPreviousPage(browserEvent?: UIEvent): void {
-		this.tree.focusPreviousPage(browserEvent);
-	}
-
-	focusLast(browserEvent?: UIEvent): void {
-		this.tree.focusLast(browserEvent);
-	}
-
-	focusFirst(browserEvent?: UIEvent): void {
-		this.tree.focusFirst(browserEvent);
-	}
-
-	getFocus(): T[] {
-		const nodes = this.tree.getFocus();
-		return nodes.map(n => n.element!);
-	}
-
-	open(elements: T[]): void {
-		const nodes = elements.map(e => this.getNode(e));
-		this.tree.open(nodes);
-	}
-
-	reveal(element: T, relativeTop?: number): void {
-		this.tree.reveal(this.getNode(element), relativeTop);
-	}
-
-	getRelativeTop(element: T): number | null {
-		return this.tree.getRelativeTop(this.getNode(element));
-	}
-
-	dispose(): void {
-		this.disposables = dispose(this.disposables);
+		return { focus, selection, expanded, scrollTop: this.scrollTop };
 	}
 }
